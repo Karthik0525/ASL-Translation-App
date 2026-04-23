@@ -1,14 +1,74 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import './App.css';
 
-const { Hands, HAND_CONNECTIONS } = window as any;
-const { Camera } = window as any;
-const { drawConnectors, drawLandmarks } = window as any;
+type Landmark = {
+  x: number;
+  y: number;
+  z: number;
+};
 
-type Results = any;
+type HandsResults = {
+  image: CanvasImageSource;
+  multiHandLandmarks?: Landmark[][];
+};
+
+type HandsInstance = {
+  setOptions: (options: {
+    maxNumHands: number;
+    modelComplexity: number;
+    minDetectionConfidence: number;
+    minTrackingConfidence: number;
+  }) => void;
+  onResults: (callback: (results: HandsResults) => void) => void;
+  send: (input: { image: HTMLVideoElement }) => Promise<void>;
+  close: () => void;
+};
+
+type HandsConstructor = new (config: {
+  locateFile: (file: string) => string;
+}) => HandsInstance;
+
+type CameraInstance = {
+  start: () => void;
+  stop: () => void;
+};
+
+type CameraConstructor = new (
+  video: HTMLVideoElement,
+  config: {
+    onFrame: () => Promise<void>;
+    width: number;
+    height: number;
+  }
+) => CameraInstance;
+
+type DrawConnectors = (
+  ctx: CanvasRenderingContext2D,
+  landmarks: Landmark[],
+  connections: unknown,
+  style: { color: string; lineWidth: number }
+) => void;
+
+type DrawLandmarks = (
+  ctx: CanvasRenderingContext2D,
+  landmarks: Landmark[],
+  style: { color: string; lineWidth: number; radius: number }
+) => void;
+
+const mediapipeWindow = window as unknown as Window & {
+  Hands: HandsConstructor;
+  HAND_CONNECTIONS: unknown;
+  Camera: CameraConstructor;
+  drawConnectors: DrawConnectors;
+  drawLandmarks: DrawLandmarks;
+};
+
+const { Hands, HAND_CONNECTIONS, Camera, drawConnectors, drawLandmarks } = mediapipeWindow;
 
 const SEQUENCE_LENGTH = 30;
 const NUM_FEATURES = 63;
+const DEFAULT_API_BASE_URL = 'https://bekfast-asl-multi-modal-api.hf.space';
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE_URL).replace(/\/$/, '');
 
 const MODEL_COPY = {
   title: 'Sequence Transformer',
@@ -23,9 +83,91 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sequenceRef = useRef<number[][]>([]);
   const lastCallTimeRef = useRef<number>(0);
+  const requestInFlightRef = useRef<boolean>(false);
 
   const [prediction, setPrediction] = useState<string>('---');
   const [confidence, setConfidence] = useState<number>(0);
+
+  const sendToTransformer = useEffectEvent(async (sequence: number[][]) => {
+    requestInFlightRef.current = true;
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/predict/transformer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ coordinates: sequence }),
+      });
+      const data = await response.json();
+
+      if (!response.ok || data.error) {
+        throw new Error(data.error ?? `Prediction request failed with status ${response.status}`);
+      }
+
+      if (data.confidence > 0.6) {
+        setPrediction(data.prediction);
+        setConfidence(data.confidence);
+      } else {
+        setPrediction('---');
+        setConfidence(0);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      requestInFlightRef.current = false;
+    }
+  });
+
+  const onResults = useEffectEvent((results: HandsResults) => {
+    if (!canvasRef.current || !videoRef.current) return;
+    const canvasCtx = canvasRef.current.getContext('2d');
+    if (!canvasCtx) return;
+
+    canvasCtx.save();
+    canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    canvasCtx.translate(canvasRef.current.width, 0);
+    canvasCtx.scale(-1, 1);
+    canvasCtx.drawImage(results.image, 0, 0, canvasRef.current.width, canvasRef.current.height);
+
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+      for (const landmarks of results.multiHandLandmarks) {
+        drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {
+          color: '#22c55e',
+          lineWidth: 3,
+        });
+        drawLandmarks(canvasCtx, landmarks, {
+          color: '#f8fafc',
+          lineWidth: 1.5,
+          radius: 3,
+        });
+      }
+    }
+    canvasCtx.restore();
+
+    const now = Date.now();
+    let coords = Array(NUM_FEATURES).fill(0.0);
+
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+      const landmarks = results.multiHandLandmarks[0];
+      coords = [];
+      for (let i = 0; i < landmarks.length; i += 1) {
+        // Mirror x before inference so the browser pipeline matches the
+        // Python webcam script, which flips frames before MediaPipe.
+        coords.push(1 - landmarks[i].x, landmarks[i].y, landmarks[i].z);
+      }
+    }
+
+    sequenceRef.current.push(coords);
+    if (sequenceRef.current.length > SEQUENCE_LENGTH) {
+      sequenceRef.current.shift();
+    }
+
+    if (sequenceRef.current.length === SEQUENCE_LENGTH) {
+      if (!requestInFlightRef.current && now - lastCallTimeRef.current >= 250) {
+        lastCallTimeRef.current = now;
+        void sendToTransformer([...sequenceRef.current]);
+      }
+    }
+  });
 
   useEffect(() => {
     if (!videoRef.current || !canvasRef.current) return;
@@ -60,77 +202,6 @@ export default function App() {
       camera.stop();
     };
   }, []);
-
-  const onResults = async (results: Results) => {
-    if (!canvasRef.current || !videoRef.current) return;
-    const canvasCtx = canvasRef.current.getContext('2d');
-    if (!canvasCtx) return;
-
-    canvasCtx.save();
-    canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    canvasCtx.translate(canvasRef.current.width, 0);
-    canvasCtx.scale(-1, 1);
-    canvasCtx.drawImage(results.image, 0, 0, canvasRef.current.width, canvasRef.current.height);
-
-    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-      for (const landmarks of results.multiHandLandmarks) {
-        drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {
-          color: '#22c55e',
-          lineWidth: 3,
-        });
-        drawLandmarks(canvasCtx, landmarks, {
-          color: '#f8fafc',
-          lineWidth: 1.5,
-          radius: 3,
-        });
-      }
-    }
-    canvasCtx.restore();
-
-    const now = Date.now();
-    let coords = Array(NUM_FEATURES).fill(0.0);
-
-    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-      const landmarks = results.multiHandLandmarks[0];
-      coords = [];
-      for (let i = 0; i < landmarks.length; i += 1) {
-        coords.push(landmarks[i].x, landmarks[i].y, landmarks[i].z);
-      }
-    }
-
-    sequenceRef.current.push(coords);
-    if (sequenceRef.current.length > SEQUENCE_LENGTH) {
-      sequenceRef.current.shift();
-    }
-
-    if (sequenceRef.current.length === SEQUENCE_LENGTH) {
-      if (now - lastCallTimeRef.current >= 250) {
-        lastCallTimeRef.current = now;
-        sendToTransformer([...sequenceRef.current]);
-      }
-    }
-  };
-
-  const sendToTransformer = async (sequence: number[][]) => {
-    try {
-      const response = await fetch('https://bekfast-asl-multi-modal-api.hf.space/predict/transformer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ coordinates: sequence }),
-      });
-      const data = await response.json();
-
-      if (data.confidence > 0.6) {
-        setPrediction(data.prediction);
-        setConfidence(data.confidence);
-      } else {
-        setPrediction('---');
-        setConfidence(0);
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
 
   const modelCopy = MODEL_COPY;
   const confidencePercent = Math.round(confidence * 100);
