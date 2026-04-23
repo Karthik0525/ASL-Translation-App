@@ -1,15 +1,44 @@
 import { useEffect, useRef, useState } from 'react';
+import './App.css';
 
-// Grab the global Google variables from the browser window directly
 const { Hands, HAND_CONNECTIONS } = window as any;
 const { Camera } = window as any;
 const { drawConnectors, drawLandmarks } = window as any;
 
-// Define the Results type since we aren't importing it anymore
 type Results = any;
+type ModelType = 'transformer' | 'cnn';
 
 const SEQUENCE_LENGTH = 30;
 const NUM_FEATURES = 63;
+
+const MODEL_COPY: Record<
+  ModelType,
+  {
+    title: string;
+    shortLabel: string;
+    subtitle: string;
+    outputLabel: string;
+    notes: string;
+    threshold: string;
+  }
+> = {
+  transformer: {
+    title: 'Kinematic Transformer',
+    shortLabel: 'Word Model',
+    subtitle: 'Temporal sequence model for 201 signed words',
+    outputLabel: 'Word',
+    notes: 'Tracks 30 frames of hand landmarks before sending a prediction.',
+    threshold: 'Confidence gate: 60%',
+  },
+  cnn: {
+    title: 'Static CNN',
+    shortLabel: 'Letter Model',
+    subtitle: 'Image classifier for A-Z fingerspelling',
+    outputLabel: 'Letter',
+    notes: 'Captures the current frame and classifies a static hand shape.',
+    threshold: 'Confidence gate: 50%',
+  },
+};
 
 export default function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -17,7 +46,7 @@ export default function App() {
   const sequenceRef = useRef<number[][]>([]);
   const lastCallTimeRef = useRef<number>(0);
 
-  const [activeModel, setActiveModel] = useState<'transformer' | 'cnn'>('transformer');
+  const [activeModel, setActiveModel] = useState<ModelType>('transformer');
   const [prediction, setPrediction] = useState<string>('---');
   const [confidence, setConfidence] = useState<number>(0);
 
@@ -51,7 +80,7 @@ export default function App() {
 
     return () => {
       hands.close();
-      if (camera) camera.stop();
+      camera.stop();
     };
   }, [activeModel]);
 
@@ -60,35 +89,37 @@ export default function App() {
     const canvasCtx = canvasRef.current.getContext('2d');
     if (!canvasCtx) return;
 
-    // 1. Draw the video feed and skeleton
     canvasCtx.save();
     canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-
-    // Mirror the canvas for a selfie-view
     canvasCtx.translate(canvasRef.current.width, 0);
     canvasCtx.scale(-1, 1);
     canvasCtx.drawImage(results.image, 0, 0, canvasRef.current.width, canvasRef.current.height);
 
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
       for (const landmarks of results.multiHandLandmarks) {
-        drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, { color: '#10B981', lineWidth: 3 }); // Modern Emerald Green
-        drawLandmarks(canvasCtx, landmarks, { color: '#ffffff', lineWidth: 2, radius: 3 }); // Clean White Dots
+        drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {
+          color: '#22c55e',
+          lineWidth: 3,
+        });
+        drawLandmarks(canvasCtx, landmarks, {
+          color: '#f8fafc',
+          lineWidth: 1.5,
+          radius: 3,
+        });
       }
     }
     canvasCtx.restore();
 
-    // Throttle API calls
     const now = Date.now();
     if (now - lastCallTimeRef.current < 250) return;
 
-    // --- TRANSFORMER LOGIC ---
     if (activeModel === 'transformer') {
       let coords = Array(NUM_FEATURES).fill(0.0);
 
       if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
         const landmarks = results.multiHandLandmarks[0];
         coords = [];
-        for (let i = 0; i < landmarks.length; i++) {
+        for (let i = 0; i < landmarks.length; i += 1) {
           coords.push(landmarks[i].x, landmarks[i].y, landmarks[i].z);
         }
       }
@@ -104,18 +135,18 @@ export default function App() {
       }
     }
 
-    // --- CNN LOGIC ---
     if (activeModel === 'cnn') {
-        lastCallTimeRef.current = now;
-        const hiddenCanvas = document.createElement('canvas');
-        hiddenCanvas.width = videoRef.current.videoWidth;
-        hiddenCanvas.height = videoRef.current.videoHeight;
-        const ctx = hiddenCanvas.getContext('2d');
-        if (ctx) {
-            ctx.drawImage(videoRef.current, 0, 0);
-            const base64Image = hiddenCanvas.toDataURL('image/jpeg', 0.8);
-            sendToCNN(base64Image);
-        }
+      lastCallTimeRef.current = now;
+      const hiddenCanvas = document.createElement('canvas');
+      hiddenCanvas.width = videoRef.current.videoWidth;
+      hiddenCanvas.height = videoRef.current.videoHeight;
+      const ctx = hiddenCanvas.getContext('2d');
+
+      if (ctx) {
+        ctx.drawImage(videoRef.current, 0, 0);
+        const base64Image = hiddenCanvas.toDataURL('image/jpeg', 0.8);
+        sendToCNN(base64Image);
+      }
     }
   };
 
@@ -127,6 +158,7 @@ export default function App() {
         body: JSON.stringify({ coordinates: sequence }),
       });
       const data = await response.json();
+
       if (data.confidence > 0.6) {
         setPrediction(data.prediction);
         setConfidence(data.confidence);
@@ -147,6 +179,7 @@ export default function App() {
         body: JSON.stringify({ image_base64: base64Image }),
       });
       const data = await response.json();
+
       if (data.confidence > 0.5) {
         setPrediction(data.prediction);
         setConfidence(data.confidence);
@@ -159,144 +192,147 @@ export default function App() {
     }
   };
 
-  // UI Theme Variables
+  const switchModel = (model: ModelType) => {
+    setActiveModel(model);
+    sequenceRef.current = [];
+    lastCallTimeRef.current = 0;
+    setPrediction('---');
+    setConfidence(0);
+  };
+
   const isTransformer = activeModel === 'transformer';
+  const modelCopy = MODEL_COPY[activeModel];
+  const confidencePercent = Math.round(confidence * 100);
+  const predictionDisplay = prediction === '---' ? 'Waiting...' : prediction.toUpperCase();
+  const confidenceTone =
+    confidence >= 0.8 ? 'high' : confidence >= 0.5 ? 'medium' : 'low';
 
   return (
-    <div style={{
-      minHeight: '100vh',
-      backgroundColor: '#0F172A', // Slate 900
-      color: '#F8FAFC', // Slate 50
-      fontFamily: 'system-ui, -apple-system, sans-serif',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      padding: '40px 20px'
-    }}>
-
-      {/* Header */}
-      <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-        <h1 style={{
-          margin: '0 0 12px 0',
-          fontSize: '2.5rem',
-          fontWeight: '800',
-          background: 'linear-gradient(to right, #60A5FA, #34D399)',
-          WebkitBackgroundClip: 'text',
-          WebkitTextFillColor: 'transparent'
-        }}>
-          ASL Vision Hub
-        </h1>
-        <p style={{ margin: 0, color: '#94A3B8', fontSize: '1.1rem' }}>
-          Multi-Modal Neural Translation Engine
-        </p>
-      </div>
-
-      {/* Modern Tabs */}
-      <div style={{
-        display: 'flex',
-        backgroundColor: '#1E293B',
-        padding: '6px',
-        borderRadius: '12px',
-        marginBottom: '40px',
-        boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.2)'
-      }}>
-        <button
-          onClick={() => { setActiveModel('transformer'); sequenceRef.current = []; setPrediction('---'); setConfidence(0); }}
-          style={{
-            padding: '12px 24px',
-            backgroundColor: isTransformer ? '#3B82F6' : 'transparent',
-            color: isTransformer ? 'white' : '#94A3B8',
-            border: 'none',
-            borderRadius: '8px',
-            cursor: 'pointer',
-            fontWeight: '600',
-            fontSize: '0.95rem',
-            transition: 'all 0.2s ease',
-            boxShadow: isTransformer ? '0 4px 6px -1px rgba(59, 130, 246, 0.5)' : 'none'
-          }}
-        >
-          Kinematic Transformer (201 Words)
-        </button>
-        <button
-          onClick={() => { setActiveModel('cnn'); setPrediction('---'); setConfidence(0); }}
-          style={{
-            padding: '12px 24px',
-            backgroundColor: !isTransformer ? '#10B981' : 'transparent',
-            color: !isTransformer ? 'white' : '#94A3B8',
-            border: 'none',
-            borderRadius: '8px',
-            cursor: 'pointer',
-            fontWeight: '600',
-            fontSize: '0.95rem',
-            transition: 'all 0.2s ease',
-            boxShadow: !isTransformer ? '0 4px 6px -1px rgba(16, 185, 129, 0.5)' : 'none'
-          }}
-        >
-          Static CNN (A-Z Alphabet)
-        </button>
-      </div>
-
-      {/* The Video Card */}
-      <div style={{
-        position: 'relative',
-        width: '640px',
-        height: '480px',
-        backgroundColor: '#000',
-        borderRadius: '24px',
-        overflow: 'hidden',
-        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
-        border: '1px solid #334155'
-      }}>
-
-        {/* Modern Floating Prediction Pill */}
-        <div style={{
-          position: 'absolute',
-          bottom: '32px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          backgroundColor: 'rgba(15, 23, 42, 0.85)', // Glassmorphism background
-          backdropFilter: 'blur(12px)',
-          padding: '16px 32px',
-          borderRadius: '50px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '24px',
-          zIndex: 10,
-          border: '1px solid rgba(255,255,255,0.1)',
-          boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.2)'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-            <span style={{ color: '#94A3B8', fontSize: '0.9rem', fontWeight: '500', textTransform: 'uppercase', letterSpacing: '1px' }}>
-              {isTransformer ? 'Word' : 'Letter'}
-            </span>
-            <span style={{ fontSize: '1.5rem', fontWeight: '800', color: '#fff' }}>
-              {prediction.toUpperCase()}
-            </span>
+    <div className="app-shell">
+      <main className="app-layout">
+        <section className="hero-panel">
+          <div className="hero-copy">
+            <div className="hero-kicker">AI Class Demo | Computer Vision + ASL Recognition</div>
+            <h1>ASL Translation Demo</h1>
+            <p className="hero-subtitle">
+              A webcam-based prototype that compares a temporal transformer for signed
+              words with a CNN for static fingerspelling. Built as a student demo to
+              test real-time gesture recognition in the browser.
+            </p>
+            <div className="hero-tags">
+              <span>MediaPipe Hands</span>
+              <span>React + TypeScript</span>
+              <span>Hugging Face API</span>
+            </div>
           </div>
 
-          <div style={{ width: '2px', height: '32px', backgroundColor: 'rgba(255,255,255,0.1)' }}></div>
-
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-            <span style={{ color: '#94A3B8', fontSize: '0.9rem', fontWeight: '500', textTransform: 'uppercase', letterSpacing: '1px' }}>
-              Conf
-            </span>
-            <span style={{
-              fontSize: '1.5rem',
-              fontWeight: '800',
-              color: confidence > 0.8 ? '#34D399' : (confidence > 0.5 ? '#FBBF24' : '#F87171')
-            }}>
-              {Math.round(confidence * 100)}%
-            </span>
+          <div className="overview-card">
+            <p className="overview-label">Current mode</p>
+            <h2>{modelCopy.title}</h2>
+            <p className="overview-text">{modelCopy.subtitle}</p>
+            <div className="overview-stats">
+              <div>
+                <span className="stat-label">Output</span>
+                <strong>{modelCopy.outputLabel}</strong>
+              </div>
+              <div>
+                <span className="stat-label">Throttle</span>
+                <strong>250 ms</strong>
+              </div>
+              <div>
+                <span className="stat-label">Filter</span>
+                <strong>{modelCopy.threshold}</strong>
+              </div>
+            </div>
           </div>
-        </div>
+        </section>
 
-        {/* Hidden Video element for MediaPipe to read */}
-        <video ref={videoRef} style={{ display: 'none' }} playsInline></video>
+        <section className="workspace-grid">
+          <div className="camera-panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Live Inference</p>
+                <h2>Camera Feed</h2>
+              </div>
+              <div className={`mode-chip ${isTransformer ? 'transformer' : 'cnn'}`}>
+                {modelCopy.shortLabel}
+              </div>
+            </div>
 
-        {/* Visible Canvas for us to draw on */}
-        <canvas ref={canvasRef} width="640" height="480" style={{ width: '100%', height: '100%', objectFit: 'cover' }}></canvas>
-      </div>
+            <div className="model-switcher" role="tablist" aria-label="Model selector">
+              <button
+                type="button"
+                className={`model-tab ${isTransformer ? 'active transformer' : ''}`}
+                onClick={() => switchModel('transformer')}
+              >
+                <span className="model-tab-title">Kinematic Transformer</span>
+                <span className="model-tab-text">201-word dynamic recognition</span>
+              </button>
+              <button
+                type="button"
+                className={`model-tab ${!isTransformer ? 'active cnn' : ''}`}
+                onClick={() => switchModel('cnn')}
+              >
+                <span className="model-tab-title">Static CNN</span>
+                <span className="model-tab-text">A-Z fingerspelling classifier</span>
+              </button>
+            </div>
 
+            <div className="camera-frame">
+              <div className="camera-overlay-top">
+                <span className="camera-badge">Webcam active</span>
+                <span className="camera-note">{modelCopy.notes}</span>
+              </div>
+
+              <div className="prediction-overlay">
+                <div className="prediction-block">
+                  <span className="prediction-label">{modelCopy.outputLabel}</span>
+                  <strong className="prediction-value">{predictionDisplay}</strong>
+                </div>
+                <div className="prediction-divider" />
+                <div className="prediction-block">
+                  <span className="prediction-label">Confidence</span>
+                  <strong className={`prediction-value confidence-${confidenceTone}`}>
+                    {confidencePercent}%
+                  </strong>
+                </div>
+              </div>
+
+              <video ref={videoRef} className="hidden-video" playsInline />
+              <canvas ref={canvasRef} width="640" height="480" className="camera-canvas" />
+            </div>
+          </div>
+
+          <aside className="side-panel">
+            <div className="info-card">
+              <p className="eyebrow">Prediction Status</p>
+              <h2>{prediction === '---' ? 'No confident output yet' : predictionDisplay}</h2>
+              <p className="info-text">
+                The app only shows a result when the model confidence passes the current
+                threshold, which helps reduce noisy predictions during movement.
+              </p>
+            </div>
+
+            <div className="info-card">
+              <p className="eyebrow">Project Notes</p>
+              <ul className="info-list">
+                <li>Transformer mode uses hand landmark sequences across multiple frames.</li>
+                <li>CNN mode works better for single-frame alphabet poses.</li>
+                <li>The webcam feed is mirrored to feel natural during signing.</li>
+              </ul>
+            </div>
+
+            <div className="info-card">
+              <p className="eyebrow">Demo Tips</p>
+              <ul className="info-list">
+                <li>Keep one hand centered in the frame for the cleanest skeleton tracking.</li>
+                <li>Pause briefly at the end of a gesture so the confidence can stabilize.</li>
+                <li>Use the model switcher to compare dynamic word recognition vs. letters.</li>
+              </ul>
+            </div>
+          </aside>
+        </section>
+      </main>
     </div>
   );
 }
