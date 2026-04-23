@@ -26,6 +26,7 @@ export default function App() {
   const [prediction, setPrediction] = useState<string>('Waiting...');
   const [confidence, setConfidence] = useState<number>(0);
   const [status, setStatus] = useState<string>('Starting camera...');
+  const [statusDetail, setStatusDetail] = useState<string>('');
   const modelCopy = MODEL_COPY;
 
   const sendFrameToBackend = useEffectEvent(async () => {
@@ -55,9 +56,12 @@ export default function App() {
       setPrediction(data.prediction === '---' ? 'Waiting...' : String(data.prediction).toUpperCase());
       setConfidence(typeof data.confidence === 'number' ? data.confidence : 0);
       setStatus('Live');
+      setStatusDetail('');
     } catch (err) {
       console.error(err);
+      const message = err instanceof Error ? err.message : 'Unknown backend error';
       setStatus('Backend error');
+      setStatusDetail(message);
     } finally {
       requestInFlightRef.current = false;
     }
@@ -137,6 +141,7 @@ export default function App() {
         }
 
         setStatus('Camera ready');
+        setStatusDetail('');
         void drawVideoFrame();
 
         intervalRef.current = window.setInterval(() => {
@@ -145,6 +150,7 @@ export default function App() {
       } catch (err) {
         console.error(err);
         setStatus('Camera access failed');
+        setStatusDetail(err instanceof Error ? err.message : 'Unable to access camera');
       }
     };
 
@@ -241,6 +247,7 @@ export default function App() {
             <p className="info-text">
               The app only shows a stable result after the backend confidence passes {thresholdText}.
             </p>
+            {statusDetail ? <p className="info-text">Backend detail: <strong>{statusDetail}</strong></p> : null}
           </div>
 
           <div className="section-block info-card">
