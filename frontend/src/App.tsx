@@ -15,28 +15,25 @@ const MODEL_COPY: Record<
   ModelType,
   {
     title: string;
-    shortLabel: string;
     subtitle: string;
     outputLabel: string;
     notes: string;
-    threshold: string;
+    tip: string;
   }
 > = {
   transformer: {
     title: 'Kinematic Transformer',
-    shortLabel: 'Word Model',
     subtitle: 'Temporal sequence model for 201 signed words',
     outputLabel: 'Word',
     notes: 'Tracks 30 frames of hand landmarks before sending a prediction.',
-    threshold: 'Confidence gate: 60%',
+    tip: 'Best for full signed words with motion over time.',
   },
   cnn: {
     title: 'Static CNN',
-    shortLabel: 'Letter Model',
     subtitle: 'Image classifier for A-Z fingerspelling',
     outputLabel: 'Letter',
     notes: 'Captures the current frame and classifies a static hand shape.',
-    threshold: 'Confidence gate: 50%',
+    tip: 'Best for single hand shapes held still for a moment.',
   },
 };
 
@@ -206,131 +203,96 @@ export default function App() {
   const predictionDisplay = prediction === '---' ? 'Waiting...' : prediction.toUpperCase();
   const confidenceTone =
     confidence >= 0.8 ? 'high' : confidence >= 0.5 ? 'medium' : 'low';
+  const thresholdText = isTransformer ? '60%' : '50%';
 
   return (
     <div className="app-shell">
       <main className="app-layout">
-        <section className="hero-panel">
-          <div className="hero-copy">
-            <div className="hero-kicker">AI Class Demo | Computer Vision + ASL Recognition</div>
-            <h1>ASL Translation Demo</h1>
-            <p className="hero-subtitle">
-              A webcam-based prototype that compares a temporal transformer for signed
-              words with a CNN for static fingerspelling. Built as a student demo to
-              test real-time gesture recognition in the browser.
-            </p>
-            <div className="hero-tags">
-              <span>MediaPipe Hands</span>
-              <span>React + TypeScript</span>
-              <span>Hugging Face API</span>
-            </div>
-          </div>
+        <header className="page-header">
+          <p className="page-label">Student AI Demo</p>
+          <h1>ASL Translation Demo</h1>
+          <p className="page-subtitle">
+            A simple webcam demo that compares a transformer for dynamic ASL words
+            with a CNN for static fingerspelling.
+          </p>
+        </header>
 
-          <div className="overview-card">
-            <p className="overview-label">Current mode</p>
-            <h2>{modelCopy.title}</h2>
-            <p className="overview-text">{modelCopy.subtitle}</p>
-            <div className="overview-stats">
-              <div>
-                <span className="stat-label">Output</span>
-                <strong>{modelCopy.outputLabel}</strong>
-              </div>
-              <div>
-                <span className="stat-label">Throttle</span>
-                <strong>250 ms</strong>
-              </div>
-              <div>
-                <span className="stat-label">Filter</span>
-                <strong>{modelCopy.threshold}</strong>
-              </div>
-            </div>
+        <section className="simple-card controls-card">
+          <h2>Model Switch</h2>
+          <div className="model-switcher" role="tablist" aria-label="Model selector">
+            <button
+              type="button"
+              className={`model-tab ${isTransformer ? 'active' : ''}`}
+              onClick={() => switchModel('transformer')}
+            >
+              Kinematic Transformer
+            </button>
+            <button
+              type="button"
+              className={`model-tab ${!isTransformer ? 'active' : ''}`}
+              onClick={() => switchModel('cnn')}
+            >
+              Static CNN
+            </button>
+          </div>
+          <div className="mode-summary">
+            <h3>Current Mode: {modelCopy.title}</h3>
+            <p>{modelCopy.subtitle}</p>
+            <p>{modelCopy.tip}</p>
           </div>
         </section>
 
-        <section className="workspace-grid">
-          <div className="camera-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">Live Inference</p>
-                <h2>Camera Feed</h2>
-              </div>
-              <div className={`mode-chip ${isTransformer ? 'transformer' : 'cnn'}`}>
-                {modelCopy.shortLabel}
-              </div>
-            </div>
-
-            <div className="model-switcher" role="tablist" aria-label="Model selector">
-              <button
-                type="button"
-                className={`model-tab ${isTransformer ? 'active transformer' : ''}`}
-                onClick={() => switchModel('transformer')}
-              >
-                <span className="model-tab-title">Kinematic Transformer</span>
-                <span className="model-tab-text">201-word dynamic recognition</span>
-              </button>
-              <button
-                type="button"
-                className={`model-tab ${!isTransformer ? 'active cnn' : ''}`}
-                onClick={() => switchModel('cnn')}
-              >
-                <span className="model-tab-title">Static CNN</span>
-                <span className="model-tab-text">A-Z fingerspelling classifier</span>
-              </button>
-            </div>
-
-            <div className="camera-frame">
-              <div className="camera-overlay-top">
-                <span className="camera-badge">Webcam active</span>
-                <span className="camera-note">{modelCopy.notes}</span>
-              </div>
-
-              <div className="prediction-overlay">
-                <div className="prediction-block">
-                  <span className="prediction-label">{modelCopy.outputLabel}</span>
-                  <strong className="prediction-value">{predictionDisplay}</strong>
-                </div>
-                <div className="prediction-divider" />
-                <div className="prediction-block">
-                  <span className="prediction-label">Confidence</span>
-                  <strong className={`prediction-value confidence-${confidenceTone}`}>
-                    {confidencePercent}%
-                  </strong>
-                </div>
-              </div>
-
-              <video ref={videoRef} className="hidden-video" playsInline />
-              <canvas ref={canvasRef} width="640" height="480" className="camera-canvas" />
+        <section className="simple-card camera-section">
+          <div className="section-heading">
+            <div>
+              <h2>Camera Feed</h2>
+              <p>Live webcam input with hand landmark tracking.</p>
             </div>
           </div>
 
-          <aside className="side-panel">
-            <div className="info-card">
-              <p className="eyebrow">Prediction Status</p>
-              <h2>{prediction === '---' ? 'No confident output yet' : predictionDisplay}</h2>
-              <p className="info-text">
-                The app only shows a result when the model confidence passes the current
-                threshold, which helps reduce noisy predictions during movement.
-              </p>
+          <div className="camera-frame">
+            <div className="prediction-overlay">
+              <div className="prediction-block">
+                <span className="prediction-label">{modelCopy.outputLabel}</span>
+                <strong className="prediction-value">{predictionDisplay}</strong>
+              </div>
+              <div className="prediction-divider" />
+              <div className="prediction-block">
+                <span className="prediction-label">Confidence</span>
+                <strong className={`prediction-value confidence-${confidenceTone}`}>
+                  {confidencePercent}%
+                </strong>
+              </div>
             </div>
 
-            <div className="info-card">
-              <p className="eyebrow">Project Notes</p>
-              <ul className="info-list">
-                <li>Transformer mode uses hand landmark sequences across multiple frames.</li>
-                <li>CNN mode works better for single-frame alphabet poses.</li>
-                <li>The webcam feed is mirrored to feel natural during signing.</li>
-              </ul>
-            </div>
+            <video ref={videoRef} className="hidden-video" playsInline />
+            <canvas ref={canvasRef} width="640" height="480" className="camera-canvas" />
+          </div>
+        </section>
 
-            <div className="info-card">
-              <p className="eyebrow">Demo Tips</p>
-              <ul className="info-list">
-                <li>Keep one hand centered in the frame for the cleanest skeleton tracking.</li>
-                <li>Pause briefly at the end of a gesture so the confidence can stabilize.</li>
-                <li>Use the model switcher to compare dynamic word recognition vs. letters.</li>
-              </ul>
-            </div>
-          </aside>
+        <section className="info-grid">
+          <div className="simple-card info-card">
+            <h2>Prediction Status</h2>
+            <p className="status-line">
+              Current {modelCopy.outputLabel.toLowerCase()}: <strong>{predictionDisplay}</strong>
+            </p>
+            <p className="status-line">
+              Confidence: <strong>{confidencePercent}%</strong>
+            </p>
+            <p className="info-text">
+              The app only shows a result after the confidence passes {thresholdText} to
+              reduce noisy predictions.
+            </p>
+          </div>
+
+          <div className="simple-card info-card">
+            <h2>Demo Tips</h2>
+            <ul className="info-list">
+              <li>Keep one hand centered in the frame.</li>
+              <li>Use good lighting if possible.</li>
+              <li>Hold the final sign still for a moment before switching signs.</li>
+            </ul>
+          </div>
         </section>
       </main>
     </div>
