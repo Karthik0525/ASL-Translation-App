@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 pydantic
-tensorflow
+tensorflow-cpu
 numpy
 torch
 torchvision

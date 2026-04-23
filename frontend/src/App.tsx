@@ -1,8 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Hands, Results } from '@mediapipe/hands';
-import { Camera } from '@mediapipe/camera_utils';
-import { drawConnectors, drawLandmarks } from '@mediapipe/drawing_utils';
-import { HAND_CONNECTIONS } from '@mediapipe/hands';
+import type { Results } from '@mediapipe/hands';
+import * as mpHands from '@mediapipe/hands';
+import * as mpCamera from '@mediapipe/camera_utils';
+import * as mpDrawing from '@mediapipe/drawing_utils';
+
+// Vite Workaround for MediaPipe's older module system
+const Hands = mpHands.Hands || (mpHands as any).default?.Hands;
+const HAND_CONNECTIONS = mpHands.HAND_CONNECTIONS || (mpHands as any).default?.HAND_CONNECTIONS;
+const Camera = mpCamera.Camera || (mpCamera as any).default?.Camera;
+const drawConnectors = mpDrawing.drawConnectors || (mpDrawing as any).default?.drawConnectors;
+const drawLandmarks = mpDrawing.drawLandmarks || (mpDrawing as any).default?.drawLandmarks;
 
 const SEQUENCE_LENGTH = 30;
 const NUM_FEATURES = 63;
@@ -118,7 +125,7 @@ export default function App() {
 
   const sendToTransformer = async (sequence: number[][]) => {
     try {
-      const response = await fetch('http://localhost:8000/predict/transformer', {
+      const response = await fetch('https://bekfast-asl-multi-modal-api.hf.space/predict/transformer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ coordinates: sequence }),
@@ -137,7 +144,7 @@ export default function App() {
 
   const sendToCNN = async (base64Image: string) => {
     try {
-      const response = await fetch('http://localhost:8000/predict/fingerspelling', {
+      const response = await fetch('https://bekfast-asl-multi-modal-api.hf.space/predict/fingerspelling', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image_base64: base64Image }),
