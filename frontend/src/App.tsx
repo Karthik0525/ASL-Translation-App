@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 // Grab the global Google variables from the browser window directly
 const { Hands, HAND_CONNECTIONS } = window as any;
@@ -25,7 +25,7 @@ export default function App() {
     if (!videoRef.current || !canvasRef.current) return;
 
     const hands = new Hands({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
+      locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
     });
 
     hands.setOptions({
