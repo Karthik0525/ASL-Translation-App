@@ -1,15 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import type { Results } from '@mediapipe/hands';
-import * as mpHands from '@mediapipe/hands';
-import * as mpCamera from '@mediapipe/camera_utils';
-import * as mpDrawing from '@mediapipe/drawing_utils';
 
-// Vite Workaround for MediaPipe's older module system
-const Hands = mpHands.Hands || (mpHands as any).default?.Hands;
-const HAND_CONNECTIONS = mpHands.HAND_CONNECTIONS || (mpHands as any).default?.HAND_CONNECTIONS;
-const Camera = mpCamera.Camera || (mpCamera as any).default?.Camera;
-const drawConnectors = mpDrawing.drawConnectors || (mpDrawing as any).default?.drawConnectors;
-const drawLandmarks = mpDrawing.drawLandmarks || (mpDrawing as any).default?.drawLandmarks;
+// Grab the global Google variables from the browser window directly
+const { Hands, HAND_CONNECTIONS } = window as any;
+const { Camera } = window as any;
+const { drawConnectors, drawLandmarks } = window as any;
+
+// Define the Results type since we aren't importing it anymore
+type Results = any;
 
 const SEQUENCE_LENGTH = 30;
 const NUM_FEATURES = 63;
@@ -54,6 +51,7 @@ export default function App() {
 
     return () => {
       hands.close();
+      if (camera) camera.stop();
     };
   }, [activeModel]); // Re-bind if model changes just in case
 
