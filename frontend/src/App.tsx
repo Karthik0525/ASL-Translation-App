@@ -1,101 +1,50 @@
 import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import './App.css';
 
-type Landmark = {
-  x: number;
-  y: number;
-  z: number;
-};
-
-type HandsResults = {
-  image: CanvasImageSource;
-  multiHandLandmarks?: Landmark[][];
-};
-
-type HandsInstance = {
-  setOptions: (options: {
-    maxNumHands: number;
-    modelComplexity: number;
-    minDetectionConfidence: number;
-    minTrackingConfidence: number;
-  }) => void;
-  onResults: (callback: (results: HandsResults) => void) => void;
-  send: (input: { image: HTMLVideoElement }) => Promise<void>;
-  close: () => void;
-};
-
-type HandsConstructor = new (config: {
-  locateFile: (file: string) => string;
-}) => HandsInstance;
-
-type CameraInstance = {
-  start: () => void;
-  stop: () => void;
-};
-
-type CameraConstructor = new (
-  video: HTMLVideoElement,
-  config: {
-    onFrame: () => Promise<void>;
-    width: number;
-    height: number;
-  }
-) => CameraInstance;
-
-type DrawConnectors = (
-  ctx: CanvasRenderingContext2D,
-  landmarks: Landmark[],
-  connections: unknown,
-  style: { color: string; lineWidth: number }
-) => void;
-
-type DrawLandmarks = (
-  ctx: CanvasRenderingContext2D,
-  landmarks: Landmark[],
-  style: { color: string; lineWidth: number; radius: number }
-) => void;
-
-const mediapipeWindow = window as unknown as Window & {
-  Hands: HandsConstructor;
-  HAND_CONNECTIONS: unknown;
-  Camera: CameraConstructor;
-  drawConnectors: DrawConnectors;
-  drawLandmarks: DrawLandmarks;
-};
-
-const { Hands, HAND_CONNECTIONS, Camera, drawConnectors, drawLandmarks } = mediapipeWindow;
-
-const SEQUENCE_LENGTH = 30;
-const NUM_FEATURES = 63;
 const DEFAULT_API_BASE_URL = 'https://bekfast-asl-multi-modal-api.hf.space';
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE_URL).replace(/\/$/, '');
+const CAPTURE_INTERVAL_MS = 250;
 
 const MODEL_COPY = {
-  title: 'Sequence Transformer',
-  subtitle: 'Temporal sequence model for 201 signed words',
+  title: 'Python Sequence Pipeline',
+  subtitle: 'Website now uses the same backend hand-tracking flow as the working local script.',
   outputLabel: 'Word',
-  notes: 'Tracks 30 frames of hand landmarks before sending a prediction.',
-  tip: 'Best for full signed words with motion over time.',
+  notes: 'Frames are sent to the backend, which runs MediaPipe and the sequence transformer in Python.',
+  tip: 'This removes browser landmark differences and should behave much closer to the local webcam demo.',
 };
 
 export default function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const sequenceRef = useRef<number[][]>([]);
-  const lastCallTimeRef = useRef<number>(0);
+  const captureCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const intervalRef = useRef<number | null>(null);
   const requestInFlightRef = useRef<boolean>(false);
+  const sessionIdRef = useRef<string>(crypto.randomUUID());
 
-  const [prediction, setPrediction] = useState<string>('---');
+  const [prediction, setPrediction] = useState<string>('Waiting...');
   const [confidence, setConfidence] = useState<number>(0);
+  const [status, setStatus] = useState<string>('Starting camera...');
+  const modelCopy = MODEL_COPY;
 
-  const sendToTransformer = useEffectEvent(async (sequence: number[][]) => {
+  const sendFrameToBackend = useEffectEvent(async () => {
+    const captureCanvas = captureCanvasRef.current;
+    if (!captureCanvas || requestInFlightRef.current) {
+      return;
+    }
+
     requestInFlightRef.current = true;
 
     try {
-      const response = await fetch(`${API_BASE_URL}/predict/transformer`, {
+      const imageBase64 = captureCanvas.toDataURL('image/jpeg', 0.9);
+      const response = await fetch(`${API_BASE_URL}/predict/frame`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ coordinates: sequence }),
+        body: JSON.stringify({
+          session_id: sessionIdRef.current,
+          image_base64: imageBase64,
+        }),
       });
       const data = await response.json();
 
@@ -103,109 +52,124 @@ export default function App() {
         throw new Error(data.error ?? `Prediction request failed with status ${response.status}`);
       }
 
-      if (data.confidence > 0.6) {
-        setPrediction(data.prediction);
-        setConfidence(data.confidence);
-      } else {
-        setPrediction('---');
-        setConfidence(0);
-      }
+      setPrediction(data.prediction === '---' ? 'Waiting...' : String(data.prediction).toUpperCase());
+      setConfidence(typeof data.confidence === 'number' ? data.confidence : 0);
+      setStatus('Live');
     } catch (err) {
       console.error(err);
+      setStatus('Backend error');
     } finally {
       requestInFlightRef.current = false;
     }
   });
 
-  const onResults = useEffectEvent((results: HandsResults) => {
-    if (!canvasRef.current || !videoRef.current) return;
-    const canvasCtx = canvasRef.current.getContext('2d');
-    if (!canvasCtx) return;
+  const drawVideoFrame = useEffectEvent(function drawVideoFrameImpl() {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const captureCanvas = captureCanvasRef.current;
 
-    canvasCtx.save();
-    canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    canvasCtx.translate(canvasRef.current.width, 0);
-    canvasCtx.scale(-1, 1);
-    canvasCtx.drawImage(results.image, 0, 0, canvasRef.current.width, canvasRef.current.height);
-
-    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-      for (const landmarks of results.multiHandLandmarks) {
-        drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {
-          color: '#22c55e',
-          lineWidth: 3,
-        });
-        drawLandmarks(canvasCtx, landmarks, {
-          color: '#f8fafc',
-          lineWidth: 1.5,
-          radius: 3,
-        });
-      }
-    }
-    canvasCtx.restore();
-
-    const now = Date.now();
-    let coords = Array(NUM_FEATURES).fill(0.0);
-
-    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-      const landmarks = results.multiHandLandmarks[0];
-      coords = [];
-      for (let i = 0; i < landmarks.length; i += 1) {
-        // Mirror x before inference so the browser pipeline matches the
-        // Python webcam script, which flips frames before MediaPipe.
-        coords.push(1 - landmarks[i].x, landmarks[i].y, landmarks[i].z);
-      }
+    if (!video || !canvas || !captureCanvas) {
+      animationFrameRef.current = requestAnimationFrame(() => {
+        drawVideoFrameImpl();
+      });
+      return;
     }
 
-    sequenceRef.current.push(coords);
-    if (sequenceRef.current.length > SEQUENCE_LENGTH) {
-      sequenceRef.current.shift();
+    const displayCtx = canvas.getContext('2d');
+    const captureCtx = captureCanvas.getContext('2d');
+
+    if (!displayCtx || !captureCtx) {
+      animationFrameRef.current = requestAnimationFrame(() => {
+        drawVideoFrameImpl();
+      });
+      return;
     }
 
-    if (sequenceRef.current.length === SEQUENCE_LENGTH) {
-      if (!requestInFlightRef.current && now - lastCallTimeRef.current >= 250) {
-        lastCallTimeRef.current = now;
-        void sendToTransformer([...sequenceRef.current]);
-      }
+    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      displayCtx.save();
+      displayCtx.clearRect(0, 0, canvas.width, canvas.height);
+      displayCtx.translate(canvas.width, 0);
+      displayCtx.scale(-1, 1);
+      displayCtx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      displayCtx.restore();
+
+      captureCtx.save();
+      captureCtx.clearRect(0, 0, captureCanvas.width, captureCanvas.height);
+      captureCtx.translate(captureCanvas.width, 0);
+      captureCtx.scale(-1, 1);
+      captureCtx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+      captureCtx.restore();
     }
+
+    animationFrameRef.current = requestAnimationFrame(() => {
+      drawVideoFrameImpl();
+    });
   });
 
   useEffect(() => {
-    if (!videoRef.current || !canvasRef.current) return;
+    let cancelled = false;
 
-    const hands = new Hands({
-      locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
-    });
+    const startCamera = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 480 },
+          audio: false,
+        });
 
-    hands.setOptions({
-      maxNumHands: 1,
-      modelComplexity: 1,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5,
-    });
-
-    hands.onResults(onResults);
-
-    const camera = new Camera(videoRef.current, {
-      onFrame: async () => {
-        if (videoRef.current) {
-          await hands.send({ image: videoRef.current });
+        if (cancelled) {
+          for (const track of stream.getTracks()) {
+            track.stop();
+          }
+          return;
         }
-      },
-      width: 640,
-      height: 480,
-    });
 
-    camera.start();
+        streamRef.current = stream;
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+
+        if (!captureCanvasRef.current) {
+          captureCanvasRef.current = document.createElement('canvas');
+          captureCanvasRef.current.width = 640;
+          captureCanvasRef.current.height = 480;
+        }
+
+        setStatus('Camera ready');
+        void drawVideoFrame();
+
+        intervalRef.current = window.setInterval(() => {
+          void sendFrameToBackend();
+        }, CAPTURE_INTERVAL_MS);
+      } catch (err) {
+        console.error(err);
+        setStatus('Camera access failed');
+      }
+    };
+
+    void startCamera();
 
     return () => {
-      hands.close();
-      camera.stop();
+      cancelled = true;
+
+      if (intervalRef.current !== null) {
+        window.clearInterval(intervalRef.current);
+      }
+
+      if (animationFrameRef.current !== null) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+
+      if (streamRef.current) {
+        for (const track of streamRef.current.getTracks()) {
+          track.stop();
+        }
+      }
     };
   }, []);
 
-  const modelCopy = MODEL_COPY;
   const confidencePercent = Math.round(confidence * 100);
-  const predictionDisplay = prediction === '---' ? 'Waiting...' : prediction.toUpperCase();
   const confidenceTone =
     confidence >= 0.8 ? 'high' : confidence >= 0.5 ? 'medium' : 'low';
   const thresholdText = '60%';
@@ -217,8 +181,8 @@ export default function App() {
           <p className="page-label">Student AI Demo</p>
           <h1>ASL Translation Demo</h1>
           <p className="page-subtitle">
-            A simple webcam demo for translating signed words using a sequence
-            transformer and hand landmark tracking.
+            A webcam demo for translating signed words using the exact Python
+            backend tracking pipeline instead of browser-side landmarks.
           </p>
         </header>
 
@@ -244,7 +208,7 @@ export default function App() {
             <div className="prediction-overlay">
               <div className="prediction-block">
                 <span className="prediction-label">{modelCopy.outputLabel}</span>
-                <strong className="prediction-value">{predictionDisplay}</strong>
+                <strong className="prediction-value">{prediction}</strong>
               </div>
               <div className="prediction-divider" />
               <div className="prediction-block">
@@ -253,9 +217,14 @@ export default function App() {
                   {confidencePercent}%
                 </strong>
               </div>
+              <div className="prediction-divider" />
+              <div className="prediction-block">
+                <span className="prediction-label">Status</span>
+                <strong className="prediction-value">{status.toUpperCase()}</strong>
+              </div>
             </div>
 
-            <video ref={videoRef} className="hidden-video" playsInline />
+            <video ref={videoRef} className="hidden-video" playsInline muted />
             <canvas ref={canvasRef} width="640" height="480" className="camera-canvas" />
           </div>
         </section>
@@ -264,14 +233,13 @@ export default function App() {
           <div className="section-block info-card">
             <h2>Prediction Status</h2>
             <p className="status-line">
-              Current {modelCopy.outputLabel.toLowerCase()}: <strong>{predictionDisplay}</strong>
+              Current {modelCopy.outputLabel.toLowerCase()}: <strong>{prediction}</strong>
             </p>
             <p className="status-line">
               Confidence: <strong>{confidencePercent}%</strong>
             </p>
             <p className="info-text">
-              The app only shows a result after the confidence passes {thresholdText} to
-              reduce noisy predictions.
+              The app only shows a stable result after the backend confidence passes {thresholdText}.
             </p>
           </div>
 
@@ -279,8 +247,8 @@ export default function App() {
             <h2>Demo Tips</h2>
             <ul className="info-list">
               <li>Keep one hand centered in the frame.</li>
-              <li>Use good lighting if possible.</li>
-              <li>Hold the final sign still for a moment before switching signs.</li>
+              <li>Hold the sign long enough for the backend to collect 30 frames.</li>
+              <li>Pause briefly between signs so the sequence can settle.</li>
             </ul>
           </div>
         </section>

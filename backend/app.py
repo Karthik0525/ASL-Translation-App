@@ -1,4 +1,12 @@
+import base64
+import threading
+import time
+from collections import deque
+from io import BytesIO
+
+import mediapipe as mp
 import numpy as np
+from PIL import Image
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,6 +33,7 @@ SEQUENCE_LENGTH = 30
 NUM_LANDMARKS = 21
 NUM_FEATURES = 63
 CONFIDENCE_THRESHOLD = 0.60
+LOW_CONFIDENCE_THRESHOLD = 0.30
 
 app = FastAPI(title="ASL Sequence Transformer API")
 
@@ -46,14 +55,71 @@ with open('combined_label_map.txt', 'r') as f:
         idx, word = line.strip().split(':')
         transformer_labels[int(idx)] = word
 
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(
+    static_image_mode=False,
+    max_num_hands=1,
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5,
+)
+
+hands_lock = threading.Lock()
+sessions_lock = threading.Lock()
+session_state = {}
+
 
 class SequencePayload(BaseModel):
     coordinates: list
 
 
+class FramePayload(BaseModel):
+    session_id: str
+    image_base64: str
+
+
 @app.get("/")
 def health_check():
     return {"status": "Online", "models_loaded": "SequenceTransformer"}
+
+
+def get_session(session_id):
+    now = time.time()
+    with sessions_lock:
+        for existing_session_id in list(session_state.keys()):
+            if now - session_state[existing_session_id]["last_seen"] > 900:
+                del session_state[existing_session_id]
+
+        if session_id not in session_state:
+            session_state[session_id] = {
+                "sequence": deque(maxlen=SEQUENCE_LENGTH),
+                "current_word": "Waiting...",
+                "confidence": 0.0,
+                "last_seen": now,
+            }
+
+        session_state[session_id]["last_seen"] = now
+        return session_state[session_id]
+
+
+def decode_base64_image(image_base64):
+    image_data = image_base64.split(",", 1)[-1]
+    image_bytes = base64.b64decode(image_data)
+    image = Image.open(BytesIO(image_bytes)).convert("RGB")
+    return np.array(image)
+
+
+def extract_hand_coordinates(image_rgb):
+    with hands_lock:
+        results = hands.process(image_rgb)
+
+    if results.multi_hand_landmarks:
+        coords = []
+        for pt in results.multi_hand_landmarks[0].landmark:
+            coords.extend([pt.x, pt.y, pt.z])
+        return np.asarray(coords, dtype=np.float32)
+
+    return np.zeros(NUM_FEATURES, dtype=np.float32)
+
 
 def normalize_sequence(sequence):
     seq = sequence.reshape(SEQUENCE_LENGTH, NUM_LANDMARKS, 3).copy()
@@ -86,6 +152,43 @@ def predict_sequence(payload: SequencePayload):
 
         if confidence < CONFIDENCE_THRESHOLD:
             prediction = "---"
+
+        return {
+            "prediction": prediction,
+            "confidence": confidence
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/predict/frame")
+def predict_frame(payload: FramePayload):
+    try:
+        session = get_session(payload.session_id)
+        image_rgb = decode_base64_image(payload.image_base64)
+        coords = extract_hand_coordinates(image_rgb)
+
+        session["sequence"].append(coords)
+
+        prediction = session["current_word"]
+        confidence = float(session["confidence"])
+
+        if len(session["sequence"]) == SEQUENCE_LENGTH:
+            seq_array = np.asarray(session["sequence"], dtype=np.float32)
+            normalized_seq = normalize_sequence(seq_array)
+            model_input = np.expand_dims(normalized_seq, axis=0)
+
+            predictions = transformer_model.predict(model_input, verbose=0)[0]
+            best_index = int(np.argmax(predictions))
+            confidence = float(predictions[best_index])
+
+            if confidence > CONFIDENCE_THRESHOLD:
+                prediction = transformer_labels.get(best_index, "Unknown")
+            elif confidence < LOW_CONFIDENCE_THRESHOLD:
+                prediction = "---"
+
+            session["current_word"] = prediction
+            session["confidence"] = confidence
 
         return {
             "prediction": prediction,
