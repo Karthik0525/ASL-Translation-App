@@ -6,35 +6,16 @@ const { Camera } = window as any;
 const { drawConnectors, drawLandmarks } = window as any;
 
 type Results = any;
-type ModelType = 'transformer' | 'cnn';
 
 const SEQUENCE_LENGTH = 30;
 const NUM_FEATURES = 63;
 
-const MODEL_COPY: Record<
-  ModelType,
-  {
-    title: string;
-    subtitle: string;
-    outputLabel: string;
-    notes: string;
-    tip: string;
-  }
-> = {
-  transformer: {
-    title: 'Kinematic Transformer',
-    subtitle: 'Temporal sequence model for 201 signed words',
-    outputLabel: 'Word',
-    notes: 'Tracks 30 frames of hand landmarks before sending a prediction.',
-    tip: 'Best for full signed words with motion over time.',
-  },
-  cnn: {
-    title: 'Static CNN',
-    subtitle: 'Image classifier for A-Z fingerspelling',
-    outputLabel: 'Letter',
-    notes: 'Captures the current frame and classifies a static hand shape.',
-    tip: 'Best for single hand shapes held still for a moment.',
-  },
+const MODEL_COPY = {
+  title: 'Sequence Transformer',
+  subtitle: 'Temporal sequence model for 201 signed words',
+  outputLabel: 'Word',
+  notes: 'Tracks 30 frames of hand landmarks before sending a prediction.',
+  tip: 'Best for full signed words with motion over time.',
 };
 
 export default function App() {
@@ -43,7 +24,6 @@ export default function App() {
   const sequenceRef = useRef<number[][]>([]);
   const lastCallTimeRef = useRef<number>(0);
 
-  const [activeModel, setActiveModel] = useState<ModelType>('transformer');
   const [prediction, setPrediction] = useState<string>('---');
   const [confidence, setConfidence] = useState<number>(0);
 
@@ -79,9 +59,9 @@ export default function App() {
       hands.close();
       camera.stop();
     };
-  }, [activeModel]);
+  }, []);
 
-const onResults = async (results: Results) => {
+  const onResults = async (results: Results) => {
     if (!canvasRef.current || !videoRef.current) return;
     const canvasCtx = canvasRef.current.getContext('2d');
     if (!canvasCtx) return;
@@ -108,50 +88,25 @@ const onResults = async (results: Results) => {
     canvasCtx.restore();
 
     const now = Date.now();
+    let coords = Array(NUM_FEATURES).fill(0.0);
 
-    // --- TRANSFORMER LOGIC ---
-    if (activeModel === 'transformer') {
-      let coords = Array(NUM_FEATURES).fill(0.0);
-
-      // 1. ALWAYS collect the frame data at full speed
-      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-        const landmarks = results.multiHandLandmarks[0];
-        coords = [];
-        for (let i = 0; i < landmarks.length; i += 1) {
-          coords.push(landmarks[i].x, landmarks[i].y, landmarks[i].z);
-        }
-      }
-
-      sequenceRef.current.push(coords);
-      if (sequenceRef.current.length > SEQUENCE_LENGTH) {
-        sequenceRef.current.shift();
-      }
-
-      // 2. ONLY throttle the network request, not the tracking
-      if (sequenceRef.current.length === SEQUENCE_LENGTH) {
-        if (now - lastCallTimeRef.current >= 250) {
-          lastCallTimeRef.current = now;
-          // Send a copy of the array to prevent mutation issues during the fetch
-          sendToTransformer([...sequenceRef.current]);
-        }
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+      const landmarks = results.multiHandLandmarks[0];
+      coords = [];
+      for (let i = 0; i < landmarks.length; i += 1) {
+        coords.push(landmarks[i].x, landmarks[i].y, landmarks[i].z);
       }
     }
 
-    // --- CNN LOGIC ---
-    if (activeModel === 'cnn') {
-      // 3. Throttle the CNN network requests here
+    sequenceRef.current.push(coords);
+    if (sequenceRef.current.length > SEQUENCE_LENGTH) {
+      sequenceRef.current.shift();
+    }
+
+    if (sequenceRef.current.length === SEQUENCE_LENGTH) {
       if (now - lastCallTimeRef.current >= 250) {
         lastCallTimeRef.current = now;
-        const hiddenCanvas = document.createElement('canvas');
-        hiddenCanvas.width = videoRef.current.videoWidth;
-        hiddenCanvas.height = videoRef.current.videoHeight;
-        const ctx = hiddenCanvas.getContext('2d');
-
-        if (ctx) {
-          ctx.drawImage(videoRef.current, 0, 0);
-          const base64Image = hiddenCanvas.toDataURL('image/jpeg', 0.8);
-          sendToCNN(base64Image);
-        }
+        sendToTransformer([...sequenceRef.current]);
       }
     }
   };
@@ -177,42 +132,12 @@ const onResults = async (results: Results) => {
     }
   };
 
-  const sendToCNN = async (base64Image: string) => {
-    try {
-      const response = await fetch('https://bekfast-asl-multi-modal-api.hf.space/predict/fingerspelling', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_base64: base64Image }),
-      });
-      const data = await response.json();
-
-      if (data.confidence > 0.5) {
-        setPrediction(data.prediction);
-        setConfidence(data.confidence);
-      } else {
-        setPrediction('---');
-        setConfidence(0);
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const switchModel = (model: ModelType) => {
-    setActiveModel(model);
-    sequenceRef.current = [];
-    lastCallTimeRef.current = 0;
-    setPrediction('---');
-    setConfidence(0);
-  };
-
-  const isTransformer = activeModel === 'transformer';
-  const modelCopy = MODEL_COPY[activeModel];
+  const modelCopy = MODEL_COPY;
   const confidencePercent = Math.round(confidence * 100);
   const predictionDisplay = prediction === '---' ? 'Waiting...' : prediction.toUpperCase();
   const confidenceTone =
     confidence >= 0.8 ? 'high' : confidence >= 0.5 ? 'medium' : 'low';
-  const thresholdText = isTransformer ? '60%' : '50%';
+  const thresholdText = '60%';
 
   return (
     <div className="app-shell">
@@ -221,41 +146,26 @@ const onResults = async (results: Results) => {
           <p className="page-label">Student AI Demo</p>
           <h1>ASL Translation Demo</h1>
           <p className="page-subtitle">
-            A simple webcam demo that compares a transformer for dynamic ASL words
-            with a CNN for static fingerspelling.
+            A simple webcam demo for translating signed words using a sequence
+            transformer and hand landmark tracking.
           </p>
         </header>
 
-        <section className="simple-card controls-card">
-          <h2>Model Switch</h2>
-          <div className="model-switcher" role="tablist" aria-label="Model selector">
-            <button
-              type="button"
-              className={`model-tab ${isTransformer ? 'active' : ''}`}
-              onClick={() => switchModel('transformer')}
-            >
-              Kinematic Transformer
-            </button>
-            <button
-              type="button"
-              className={`model-tab ${!isTransformer ? 'active' : ''}`}
-              onClick={() => switchModel('cnn')}
-            >
-              Static CNN
-            </button>
-          </div>
+        <section className="section-block intro-section">
           <div className="mode-summary">
-            <h3>Current Mode: {modelCopy.title}</h3>
+            <p className="section-label">Current Mode</p>
+            <h2>{modelCopy.title}</h2>
             <p>{modelCopy.subtitle}</p>
             <p>{modelCopy.tip}</p>
           </div>
         </section>
 
-        <section className="simple-card camera-section">
+        <section className="section-block camera-section">
           <div className="section-heading">
             <div>
+              <p className="section-label">Live Demo</p>
               <h2>Camera Feed</h2>
-              <p>Live webcam input with hand landmark tracking.</p>
+              <p>{modelCopy.notes}</p>
             </div>
           </div>
 
@@ -280,7 +190,7 @@ const onResults = async (results: Results) => {
         </section>
 
         <section className="info-grid">
-          <div className="simple-card info-card">
+          <div className="section-block info-card">
             <h2>Prediction Status</h2>
             <p className="status-line">
               Current {modelCopy.outputLabel.toLowerCase()}: <strong>{predictionDisplay}</strong>
@@ -294,7 +204,7 @@ const onResults = async (results: Results) => {
             </p>
           </div>
 
-          <div className="simple-card info-card">
+          <div className="section-block info-card">
             <h2>Demo Tips</h2>
             <ul className="info-list">
               <li>Keep one hand centered in the frame.</li>

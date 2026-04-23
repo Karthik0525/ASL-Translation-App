@@ -3,6 +3,3 @@ uvicorn
 pydantic
 tensorflow-cpu
 numpy
-torch
-torchvision
-Pillow

@@ -11,7 +11,7 @@
 }
 
 .page-header {
-  margin-bottom: 20px;
+  margin-bottom: 28px;
 }
 
 .page-label {
@@ -38,23 +38,25 @@
   color: #cbd5e1;
 }
 
-.simple-card {
-  background: #111c31;
-  border: 1px solid #22314f;
-  border-radius: 16px;
+.section-block {
+  padding: 18px 0 22px;
+  border-top: 1px solid #22314f;
 }
 
-.controls-card,
-.camera-section,
-.info-card {
-  padding: 20px;
+.section-label {
+  margin: 0 0 8px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #93c5fd;
 }
 
-.controls-card {
-  margin-bottom: 20px;
+.intro-section,
+.camera-section {
+  margin-bottom: 18px;
 }
 
-.controls-card h2,
 .camera-section h2,
 .info-card h2 {
   margin: 0 0 12px;
@@ -62,45 +64,13 @@
   color: #f8fafc;
 }
 
-.model-switcher {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.model-tab {
-  padding: 12px 16px;
-  border: 1px solid #334155;
-  border-radius: 10px;
-  background: #17233b;
-  color: #cbd5e1;
-  font-size: 0.98rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
-}
-
-.model-tab:hover {
-  background: #1b2a46;
-}
-
-.model-tab.active {
-  background: #1d4ed8;
-  border-color: #3b82f6;
-  color: #eff6ff;
-}
-
 .mode-summary {
-  padding: 14px 16px;
-  border-radius: 12px;
-  background: #0f1a2e;
-  border: 1px solid #22314f;
+  max-width: 720px;
 }
 
-.mode-summary h3 {
+.mode-summary h2 {
   margin: 0 0 8px;
-  font-size: 1rem;
+  font-size: 1.25rem;
   color: #f8fafc;
 }
 
@@ -115,7 +85,7 @@
 }
 
 .camera-section {
-  margin-bottom: 20px;
+  margin-bottom: 22px;
 }
 
 .section-heading {
@@ -134,7 +104,7 @@
   overflow: hidden;
   border-radius: 14px;
   background: #020617;
-  border: 1px solid #334155;
+  border: 1px solid #2f3e5b;
 }
 
 .prediction-overlay {
@@ -150,7 +120,7 @@
   padding: 14px 18px;
   border-radius: 14px;
   background: rgba(15, 23, 42, 0.92);
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid rgba(148, 163, 184, 0.18);
 }
 
 .prediction-block {
@@ -207,6 +177,10 @@
   gap: 20px;
 }
 
+.info-card {
+  padding-right: 20px;
+}
+
 .status-line,
 .info-text {
   margin: 0;
@@ -236,19 +210,12 @@
     padding: 20px 0 28px;
   }
 
-  .controls-card,
-  .camera-section,
-  .info-card {
-    padding: 16px;
+  .section-block {
+    padding: 16px 0 18px;
   }
 
-  .model-switcher,
   .info-grid {
     grid-template-columns: 1fr;
-  }
-
-  .info-grid {
-    display: grid;
   }
 
   .prediction-overlay {
@@ -262,5 +229,9 @@
   .prediction-divider {
     width: 100%;
     height: 1px;
+  }
+
+  .info-card {
+    padding-right: 0;
   }
 }
