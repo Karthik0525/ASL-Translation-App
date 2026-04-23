@@ -81,7 +81,7 @@ export default function App() {
     };
   }, [activeModel]);
 
-  const onResults = async (results: Results) => {
+const onResults = async (results: Results) => {
     if (!canvasRef.current || !videoRef.current) return;
     const canvasCtx = canvasRef.current.getContext('2d');
     if (!canvasCtx) return;
@@ -108,11 +108,12 @@ export default function App() {
     canvasCtx.restore();
 
     const now = Date.now();
-    if (now - lastCallTimeRef.current < 250) return;
 
+    // --- TRANSFORMER LOGIC ---
     if (activeModel === 'transformer') {
       let coords = Array(NUM_FEATURES).fill(0.0);
 
+      // 1. ALWAYS collect the frame data at full speed
       if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
         const landmarks = results.multiHandLandmarks[0];
         coords = [];
@@ -126,23 +127,31 @@ export default function App() {
         sequenceRef.current.shift();
       }
 
+      // 2. ONLY throttle the network request, not the tracking
       if (sequenceRef.current.length === SEQUENCE_LENGTH) {
-        lastCallTimeRef.current = now;
-        sendToTransformer(sequenceRef.current);
+        if (now - lastCallTimeRef.current >= 250) {
+          lastCallTimeRef.current = now;
+          // Send a copy of the array to prevent mutation issues during the fetch
+          sendToTransformer([...sequenceRef.current]);
+        }
       }
     }
 
+    // --- CNN LOGIC ---
     if (activeModel === 'cnn') {
-      lastCallTimeRef.current = now;
-      const hiddenCanvas = document.createElement('canvas');
-      hiddenCanvas.width = videoRef.current.videoWidth;
-      hiddenCanvas.height = videoRef.current.videoHeight;
-      const ctx = hiddenCanvas.getContext('2d');
+      // 3. Throttle the CNN network requests here
+      if (now - lastCallTimeRef.current >= 250) {
+        lastCallTimeRef.current = now;
+        const hiddenCanvas = document.createElement('canvas');
+        hiddenCanvas.width = videoRef.current.videoWidth;
+        hiddenCanvas.height = videoRef.current.videoHeight;
+        const ctx = hiddenCanvas.getContext('2d');
 
-      if (ctx) {
-        ctx.drawImage(videoRef.current, 0, 0);
-        const base64Image = hiddenCanvas.toDataURL('image/jpeg', 0.8);
-        sendToCNN(base64Image);
+        if (ctx) {
+          ctx.drawImage(videoRef.current, 0, 0);
+          const base64Image = hiddenCanvas.toDataURL('image/jpeg', 0.8);
+          sendToCNN(base64Image);
+        }
       }
     }
   };
