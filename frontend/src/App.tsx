@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 // Grab the global Google variables from the browser window directly
 const { Hands, HAND_CONNECTIONS } = window as any;
